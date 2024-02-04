@@ -1,15 +1,16 @@
 import sys
 import os
 import subprocess
+import threading
 import logging
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                              QWidget, QLabel, QLineEdit, QProgressBar, QCheckBox, 
                              QFileDialog, QTextEdit, QGroupBox, QHBoxLayout)
 from PyQt5.QtCore import pyqtSignal, QThread, pyqtSlot
 
-# Initialize logging
-logging.basicConfig(level=logging.INFO, filename='setup.log', filemode='w', 
-                    format='%(name)s - %(levelname)s - %(message)s')
+# Initialize logging for debugging and tracking
+logging.basicConfig(level=logging.INFO, filename='setup.log', filemode='w',
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 class SetupThread(QThread):
     """
@@ -18,107 +19,96 @@ class SetupThread(QThread):
     update_signal = pyqtSignal(str)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, folder, libs, additional_libs):
+    def __init__(self, folder, libs, additional_libs, progressBar, messageArea, cancelFlag):
         QThread.__init__(self)
         self.folder = folder
         self.libs = libs
         self.additional_libs = additional_libs
+        self.progressBar = progressBar
+        self.messageArea = messageArea
+        self.cancelFlag = cancelFlag
+        self.totalSteps = 2 + len(libs) + len(additional_libs)
+        self.completedSteps = 0
 
     def run(self):
         try:
             if not os.path.isdir(self.folder):
                 raise Exception("Invalid folder path")
-
             os.chdir(self.folder)
+            self.increment_progress("Navigating to folder...")
 
-            # Create and activate virtual environment
-            self.update_signal.emit("Creating virtual environment...")
-            self.createAndActivateVenv()
+            self.createVenv()
+            self.increment_progress("Creating virtual environment...")
 
-            # Update pip
-            self.update_signal.emit("Updating pip...")
-            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-
-            # Create src folder
-            self.update_signal.emit("Creating src folder...")
-            os.makedirs("src", exist_ok=True)
-
-            # Install libraries
-            for lib in self.libs + self.additional_libs:
-                if lib.strip():
-                    self.update_signal.emit(f"Installing {lib}...")
-                    subprocess.run([sys.executable, "-m", "pip", "install", lib.strip()])
+            self.updatePip()
+            self.installLibs()
 
             self.update_signal.emit("Setup complete!")
 
         except Exception as e:
             self.error_signal.emit(str(e))
             logging.error("Error in setup process: " + str(e))
+            self.update_signal.emit(f"Error occurred: {str(e)}")
 
-    def createAndActivateVenv(self):
-        """
-        Create and activate a virtual environment based on the operating system.
-        """
+    def createVenv(self):
+        # Create venv
         venv_path = os.path.join(self.folder, 'venv')
-        
         if not os.path.exists(venv_path):
-            self.update_signal.emit("Creating virtual environment...")
-            if sys.platform == "win32":
-                subprocess.run(["python", "-m", "venv", "venv"])
-            else:
-                subprocess.run(["python3", "-m", "venv", "venv"])
-        else:
-            self.update_signal.emit("Virtual environment already exists.")
+            subprocess.run(["python", "-m", "venv", "venv"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.increment_progress("Creating venv...")
 
-        activate_command = ".\\venv\\Scripts\\activate" if sys.platform == "win32" else "source venv/bin/activate"
-        subprocess.run(activate_command, shell=True)
+    def updatePip(self):
+        # Update pip
+        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.increment_progress("Updating pip...")
+
+    def installLibs(self):
+        # Create src folder
+        os.makedirs("src", exist_ok=True)
+        self.increment_progress("Creating src folder...")
+        # Install libraries
+        for lib in self.libs + self.additional_libs:
+            if lib.strip():
+                subprocess.run([sys.executable, "-m", "pip", "install", lib.strip()],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.increment_progress(f"Installing {lib}...")
+                if self.cancelFlag.is_set():
+                    self.update_signal.emit("Setup canceled.")
+                    return
+
+    def increment_progress(self, message):
+        if self.cancelFlag.is_set():
+            return
+        self.completedSteps += 1
+        progress = int((self.completedSteps / self.totalSteps) * 100)
+        self.progressBar.setValue(progress)
+        self.update_signal.emit(message)
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.initUI()
+        self.cancelFlag = threading.Event()
 
     def initUI(self):
-        # Create label for window
-        #self.titleLabel = QLabel('Software Dev Setup Tool', self)
-
-        # Define folderInput here before it's used anywhere else
-        self.folderInput = QLineEdit(self)
-        # Ensure browseButton is defined here
-        self.browseButton = QPushButton('Browse', self)
-        # Ensure startButton is defined here
-        self.startButton = QPushButton('Start', self)
-        # Define progressBar here
-        self.progressBar = QProgressBar(self)
-        # Define messageArea here
-        self.messageArea = QTextEdit(self)
-        self.messageArea.setReadOnly(True)
-        # Main layout
         mainLayout = QVBoxLayout()
 
-        # Horizontal layout for two columns of categories
+        # Two-column layout for categories
         categoriesLayout = QHBoxLayout()
-
-        # Left column for first half of the categories
-        leftColumn = QVBoxLayout()
+        leftColumn, rightColumn = QVBoxLayout(), QVBoxLayout()
+        # Add categories to leftColumn and rightColumn
         leftColumn.addWidget(self.createCategoryGroup("Math/Data Science", ["numpy", "pandas", "scikit-learn"]))
-        leftColumn.addWidget(self.createCategoryGroup("Web Development", ["flask", "beautifulsoup4", "requests"]))
+        leftColumn.addWidget(self.createCategoryGroup("Web Development", ["flask", "beautifulsoup4", "requests", "streamlit"]))
         leftColumn.addWidget(self.createCategoryGroup("Visualization", ["matplotlib"]))
-
-        # Right column for second half of the categories
-        rightColumn = QVBoxLayout()
         rightColumn.addWidget(self.createCategoryGroup("GUI Development", ["PyQt5"]))
-        rightColumn.addWidget(self.createCategoryGroup("Database", ["sqlalchemy"]))
+        rightColumn.addWidget(self.createCategoryGroup("Database", ["sqlalchemy", "psycopg2"]))
         rightColumn.addWidget(self.createCategoryGroup("Software Development Tools", ["pyinstaller"]))
-
-        # Add the two columns to the categories layout
         categoriesLayout.addLayout(leftColumn)
         categoriesLayout.addLayout(rightColumn)
-
-        # Add categories layout to the main layout
         mainLayout.addLayout(categoriesLayout)
 
-        # Other Libraries
+        # Other Libraries input
         self.additionalLibsInput = QLineEdit(self)
         self.additionalLibsInput.setPlaceholderText("Enter additional libraries, separated by commas")
         otherGroup = QGroupBox("Other")
@@ -127,22 +117,31 @@ class MainWindow(QMainWindow):
         otherGroup.setLayout(otherLayout)
         mainLayout.addWidget(otherGroup)
 
-        # Other GUI elements (folder selection, buttons, message area)
+        # Folder selection, buttons, progress bar, and message area
+        self.folderInput = QLineEdit(self)
+        self.browseButton = QPushButton('Browse', self)
+        self.startButton = QPushButton('Start', self)
+        self.cancelButton = QPushButton('Cancel', self)
+        self.progressBar = QProgressBar(self)
+        self.messageArea = QTextEdit(self)
+        self.messageArea.setReadOnly(True)
+
         mainLayout.addWidget(QLabel('Select Target Folder:'))
         mainLayout.addWidget(self.folderInput)
         mainLayout.addWidget(self.browseButton)
         mainLayout.addWidget(self.startButton)
+        mainLayout.addWidget(self.cancelButton)
         mainLayout.addWidget(self.progressBar)
         mainLayout.addWidget(self.messageArea)
 
-        # Set main layout
         container = QWidget()
         container.setLayout(mainLayout)
         self.setCentralWidget(container)
 
-        # Signal Connections
+        # Connect signals to slots
         self.browseButton.clicked.connect(self.browseFolder)
         self.startButton.clicked.connect(self.startSetup)
+        self.cancelButton.clicked.connect(self.cancelSetup)
 
     def createCategoryGroup(self, title, libraries):
         """
@@ -150,38 +149,58 @@ class MainWindow(QMainWindow):
         """
         group = QGroupBox(title)
         groupLayout = QVBoxLayout()
-
         for lib in libraries:
             checkbox = QCheckBox(lib, self)
             groupLayout.addWidget(checkbox)
-
         group.setLayout(groupLayout)
         return group
 
     def browseFolder(self):
+        """
+        Open a dialog for folder selection and update the folder input field.
+        """
         folder = QFileDialog.getExistingDirectory(self, "Select Folder")
         if folder:
             self.folderInput.setText(folder)
 
     def startSetup(self):
+        """
+        Initiate the setup process in a separate thread.
+        """
         target_folder = self.folderInput.text()
         additional_libs = self.additionalLibsInput.text().split(',')
         selected_libs = [cb.text() for cb in self.findChildren(QCheckBox) if cb.isChecked()]
 
-        self.setupThread = SetupThread(target_folder, selected_libs, additional_libs)
-        self.setupThread.update_signal.connect(self.updateProgress)
-        self.setupThread.error_signal.connect(self.showError)
+        self.setupThread = SetupThread(target_folder, selected_libs, additional_libs,
+                                       self.progressBar, self.messageArea, self.cancelFlag)
+        self.setupThread.update_signal.connect(self.updateMessage)
+        self.setupThread.error_signal.connect(self.showErrorMessage)
         self.setupThread.start()
 
-    @pyqtSlot(str, result=str)
-    def updateProgress(self, message):
-        self.messageArea.append(message)  # Append message to the text area
+    @pyqtSlot(str)
+    def updateMessage(self, message):
+        """
+        Update the message area with the given message.
+        """
+        self.messageArea.append(message)
 
-    @pyqtSlot(str, result=str)
-    def showError(self, error_message):
-        self.messageArea.append("Error: " + error_message)  # Append error message to the text area
+    @pyqtSlot(str)
+    def showErrorMessage(self, error_message):
+        """
+        Display an error message in the message area.
+        """
+        self.messageArea.append("Error: " + error_message)
+
+    def cancelSetup(self):
+        """
+        Signal the setup thread to stop the setup process.
+        """
+        self.cancelFlag.set()
 
 def main():
+    """
+    Main function to start the application.
+    """
     app = QApplication(sys.argv)
     mainWin = MainWindow()
     mainWin.show()
