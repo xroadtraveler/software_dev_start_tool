@@ -98,12 +98,21 @@ class MainWindow(QMainWindow):
         categoriesLayout = QHBoxLayout()
         leftColumn, rightColumn = QVBoxLayout(), QVBoxLayout()
         # Add categories to leftColumn and rightColumn
+        # Left column for the first half of the categories:
         leftColumn.addWidget(self.createCategoryGroup("Math/Data Science", ["numpy", "pandas", "scikit-learn"]))
         leftColumn.addWidget(self.createCategoryGroup("Web Development", ["flask", "beautifulsoup4", "requests", "streamlit"]))
         leftColumn.addWidget(self.createCategoryGroup("Visualization", ["matplotlib"]))
-        rightColumn.addWidget(self.createCategoryGroup("GUI Development", ["PyQt5"]))
+        # Righ column for second half of the categories:
+        rightColumn.addWidget(self.createCategoryGroup("GUI Development", ["PyQt5", "PyQt5Designer"]))
         rightColumn.addWidget(self.createCategoryGroup("Database", ["sqlalchemy", "psycopg2"]))
-        rightColumn.addWidget(self.createCategoryGroup("Software Development Tools", ["pyinstaller"]))
+        #rightColumn.addWidget(self.createCategoryGroup("Software Development Tools", ["pyinstaller", "pipreqs"]))
+        # --Start-- Find the pipreqs checkbox and set it checked by default (replaces above line) --Start--
+        devToolsGroup = self.createCategoryGroup("Software Development Tools", ["pyinstaller", "pipreqs"])
+        for widget in devToolsGroup.findChildren(QCheckBox):
+            if widget.text() == "pipreqs":
+                widget.setChecked(True)
+        rightColumn.addWidget(devToolsGroup)
+        # --End-- Modification to add 'pipreqs' and set it to be auto-checked --End--
         categoriesLayout.addLayout(leftColumn)
         categoriesLayout.addLayout(rightColumn)
         mainLayout.addLayout(categoriesLayout)
